@@ -1,5 +1,3 @@
-use std::{sync::Arc, thread};
-
 use crate::*;
 
 /// Handle to a pipeline layout.
@@ -8,23 +6,14 @@ use crate::*;
 /// It can be created with [`Device::create_pipeline_layout`].
 ///
 /// Corresponds to [WebGPU `GPUPipelineLayout`](https://gpuweb.github.io/gpuweb/#gpupipelinelayout).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PipelineLayout {
-    pub(crate) context: Arc<C>,
-    pub(crate) data: Box<Data>,
+    pub(crate) inner: dispatch::DispatchPipelineLayout,
 }
 #[cfg(send_sync)]
 static_assertions::assert_impl_all!(PipelineLayout: Send, Sync);
 
-super::impl_partialeq_eq_hash!(PipelineLayout);
-
-impl Drop for PipelineLayout {
-    fn drop(&mut self) {
-        if !thread::panicking() {
-            self.context.pipeline_layout_drop(self.data.as_ref());
-        }
-    }
-}
+crate::cmp::impl_eq_ord_hash_proxy!(PipelineLayout => .inner);
 
 /// Describes a [`PipelineLayout`].
 ///
@@ -40,8 +29,8 @@ pub struct PipelineLayoutDescriptor<'a> {
     /// "set = 0", second entry will provide all the bindings for "set = 1" etc.
     pub bind_group_layouts: &'a [&'a BindGroupLayout],
     /// Set of push constant ranges this pipeline uses. Each shader stage that uses push constants
-    /// must define the range in push constant memory that corresponds to its single `layout(push_constant)`
-    /// uniform block.
+    /// must define the range in push constant memory that corresponds to its single `var<push_constant>`
+    /// buffer.
     ///
     /// If this array is non-empty, the [`Features::PUSH_CONSTANTS`] must be enabled.
     pub push_constant_ranges: &'a [PushConstantRange],

@@ -7,19 +7,22 @@ mod belt;
 mod device;
 mod encoder;
 mod init;
+mod texture_blitter;
 
 use std::sync::Arc;
-use std::{
-    borrow::Cow,
-    mem::{align_of, size_of},
-    ptr::copy_nonoverlapping,
-};
+use std::{borrow::Cow, ptr::copy_nonoverlapping};
 
 pub use belt::StagingBelt;
-pub use device::{BufferInitDescriptor, DeviceExt, TextureDataOrder};
+pub use device::{BufferInitDescriptor, DeviceExt};
 pub use encoder::RenderEncoder;
 pub use init::*;
-pub use wgt::{math::*, DispatchIndirectArgs, DrawIndexedIndirectArgs, DrawIndirectArgs};
+#[cfg(feature = "wgsl")]
+pub use texture_blitter::{TextureBlitter, TextureBlitterBuilder};
+pub use wgt::{
+    math::*, DispatchIndirectArgs, DrawIndexedIndirectArgs, DrawIndirectArgs, TextureDataOrder,
+};
+
+use crate::dispatch;
 
 /// Treat the given byte slice as a SPIR-V module.
 ///
@@ -84,7 +87,7 @@ pub fn make_spirv_raw(data: &[u8]) -> Cow<'_, [u32]> {
 /// CPU accessible buffer used to download data back from the GPU.
 pub struct DownloadBuffer {
     _gpu_buffer: Arc<super::Buffer>,
-    mapped_range: Box<dyn crate::context::BufferMappedRange>,
+    mapped_range: dispatch::DispatchBufferMappedRange,
 }
 
 impl DownloadBuffer {
@@ -100,7 +103,6 @@ impl DownloadBuffer {
             None => buffer.buffer.map_context.lock().total_size - buffer.offset,
         };
 
-        #[allow(clippy::arc_with_non_send_sync)] // False positive on emscripten
         let download = Arc::new(device.create_buffer(&super::BufferDescriptor {
             size,
             usage: super::BufferUsages::COPY_DST | super::BufferUsages::MAP_READ,
@@ -123,11 +125,7 @@ impl DownloadBuffer {
                     return;
                 }
 
-                let mapped_range = crate::context::DynContext::buffer_get_mapped_range(
-                    &*download.context,
-                    download.data.as_ref(),
-                    0..size,
-                );
+                let mapped_range = download.inner.get_mapped_range(0..size);
                 callback(Ok(Self {
                     _gpu_buffer: download,
                     mapped_range,

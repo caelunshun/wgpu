@@ -264,6 +264,7 @@ fn emit_workgroup_uniform_load_result() {
 #[cfg(feature = "wgsl-in")]
 #[test]
 fn bad_cross_builtin_args() {
+    // NOTE: Things we expect to actually compile are in the `cross` snapshot test.
     let cases = [
         (
             "vec2(0., 1.)",
@@ -315,6 +316,8 @@ fn main() {{
 #[cfg(feature = "wgsl-in")]
 #[test]
 fn incompatible_interpolation_and_sampling_types() {
+    use dummy_interpolation_shader::DummyInterpolationShader;
+
     // NOTE: Things we expect to actually compile are in the `interpolate` snapshot test.
     use itertools::Itertools;
 
@@ -395,6 +398,8 @@ fn incompatible_interpolation_and_sampling_types() {
 #[cfg(all(feature = "wgsl-in", feature = "glsl-out"))]
 #[test]
 fn no_flat_first_in_glsl() {
+    use dummy_interpolation_shader::DummyInterpolationShader;
+
     let DummyInterpolationShader {
         source: _,
         module,
@@ -431,44 +436,46 @@ fn no_flat_first_in_glsl() {
     ));
 }
 
-struct DummyInterpolationShader {
-    source: String,
-    module: naga::Module,
-    interpolate_attr: String,
-    entry_point: &'static str,
-}
+#[cfg(all(test, feature = "wgsl-in"))]
+mod dummy_interpolation_shader {
+    pub struct DummyInterpolationShader {
+        pub source: String,
+        pub module: naga::Module,
+        pub interpolate_attr: String,
+        pub entry_point: &'static str,
+    }
 
-impl DummyInterpolationShader {
-    fn new(interpolation: naga::Interpolation, sampling: Option<naga::Sampling>) -> Self {
-        // NOTE: If you have to add variants below, make sure to add them to the
-        // `cartesian_product`'d combinations in tests around here!
-        let interpolation_str = match interpolation {
-            naga::Interpolation::Flat => "flat",
-            naga::Interpolation::Linear => "linear",
-            naga::Interpolation::Perspective => "perspective",
-        };
-        let sampling_str = match sampling {
-            None => String::new(),
-            Some(sampling) => format!(
-                ", {}",
-                match sampling {
-                    naga::Sampling::First => "first",
-                    naga::Sampling::Either => "either",
-                    naga::Sampling::Center => "center",
-                    naga::Sampling::Centroid => "centroid",
-                    naga::Sampling::Sample => "sample",
-                }
-            ),
-        };
-        let member_type = match interpolation {
-            naga::Interpolation::Perspective | naga::Interpolation::Linear => "f32",
-            naga::Interpolation::Flat => "u32",
-        };
+    impl DummyInterpolationShader {
+        pub fn new(interpolation: naga::Interpolation, sampling: Option<naga::Sampling>) -> Self {
+            // NOTE: If you have to add variants below, make sure to add them to the
+            // `cartesian_product`'d combinations in tests around here!
+            let interpolation_str = match interpolation {
+                naga::Interpolation::Flat => "flat",
+                naga::Interpolation::Linear => "linear",
+                naga::Interpolation::Perspective => "perspective",
+            };
+            let sampling_str = match sampling {
+                None => String::new(),
+                Some(sampling) => format!(
+                    ", {}",
+                    match sampling {
+                        naga::Sampling::First => "first",
+                        naga::Sampling::Either => "either",
+                        naga::Sampling::Center => "center",
+                        naga::Sampling::Centroid => "centroid",
+                        naga::Sampling::Sample => "sample",
+                    }
+                ),
+            };
+            let member_type = match interpolation {
+                naga::Interpolation::Perspective | naga::Interpolation::Linear => "f32",
+                naga::Interpolation::Flat => "u32",
+            };
 
-        let interpolate_attr = format!("@interpolate({interpolation_str}{sampling_str})");
-        let source = format!(
-            "\
-struct VertexOutput {{
+            let interpolate_attr = format!("@interpolate({interpolation_str}{sampling_str})");
+            let source = format!(
+                "\
+                struct VertexOutput {{
     @location(0) {interpolate_attr} member: {member_type},
 }}
 
@@ -477,14 +484,204 @@ fn main(input: VertexOutput) {{
     // ...
 }}
 "
-        );
-        let module = naga::front::wgsl::parse_str(&source).unwrap();
+            );
+            let module = naga::front::wgsl::parse_str(&source).unwrap();
 
-        Self {
-            source,
-            module,
-            interpolate_attr,
-            entry_point: "main",
+            Self {
+                source,
+                module,
+                interpolate_attr,
+                entry_point: "main",
+            }
         }
+    }
+}
+
+#[allow(dead_code)]
+struct BindingArrayFixture {
+    module: naga::Module,
+    span: naga::Span,
+    ty_u32: naga::Handle<naga::Type>,
+    ty_array: naga::Handle<naga::Type>,
+    ty_struct: naga::Handle<naga::Type>,
+    validator: naga::valid::Validator,
+}
+
+impl BindingArrayFixture {
+    fn new() -> Self {
+        let mut module = naga::Module::default();
+        let span = naga::Span::default();
+        let ty_u32 = module.types.insert(
+            naga::Type {
+                name: Some("u32".into()),
+                inner: naga::TypeInner::Scalar(naga::Scalar::U32),
+            },
+            span,
+        );
+        let ty_array = module.types.insert(
+            naga::Type {
+                name: Some("array<u32, 10>".into()),
+                inner: naga::TypeInner::Array {
+                    base: ty_u32,
+                    size: naga::ArraySize::Constant(std::num::NonZeroU32::new(10).unwrap()),
+                    stride: 4,
+                },
+            },
+            span,
+        );
+        let ty_struct = module.types.insert(
+            naga::Type {
+                name: Some("S".into()),
+                inner: naga::TypeInner::Struct {
+                    members: vec![naga::StructMember {
+                        name: Some("m".into()),
+                        ty: ty_u32,
+                        binding: None,
+                        offset: 0,
+                    }],
+                    span: 4,
+                },
+            },
+            span,
+        );
+        let validator = naga::valid::Validator::new(Default::default(), Default::default());
+        BindingArrayFixture {
+            module,
+            span,
+            ty_u32,
+            ty_array,
+            ty_struct,
+            validator,
+        }
+    }
+}
+
+#[test]
+fn binding_arrays_hold_structs() {
+    let mut t = BindingArrayFixture::new();
+    let _binding_array = t.module.types.insert(
+        naga::Type {
+            name: Some("binding_array_of_struct".into()),
+            inner: naga::TypeInner::BindingArray {
+                base: t.ty_struct,
+                size: naga::ArraySize::Dynamic,
+            },
+        },
+        t.span,
+    );
+
+    assert!(t.validator.validate(&t.module).is_ok());
+}
+
+#[test]
+fn binding_arrays_cannot_hold_arrays() {
+    let mut t = BindingArrayFixture::new();
+    let _binding_array = t.module.types.insert(
+        naga::Type {
+            name: Some("binding_array_of_array".into()),
+            inner: naga::TypeInner::BindingArray {
+                base: t.ty_array,
+                size: naga::ArraySize::Dynamic,
+            },
+        },
+        t.span,
+    );
+
+    assert!(t.validator.validate(&t.module).is_err());
+}
+
+#[test]
+fn binding_arrays_cannot_hold_scalars() {
+    let mut t = BindingArrayFixture::new();
+    let _binding_array = t.module.types.insert(
+        naga::Type {
+            name: Some("binding_array_of_scalar".into()),
+            inner: naga::TypeInner::BindingArray {
+                base: t.ty_u32,
+                size: naga::ArraySize::Dynamic,
+            },
+        },
+        t.span,
+    );
+
+    assert!(t.validator.validate(&t.module).is_err());
+}
+
+#[cfg(feature = "wgsl-in")]
+#[test]
+fn validation_error_messages() {
+    let cases = [
+        (
+            r#"@group(0) @binding(0) var my_sampler: sampler;
+
+                fn foo(tex: texture_2d<f32>) -> vec4<f32> {
+                    return textureSampleLevel(tex, my_sampler, vec2f(0, 0), 0.0);
+                }
+
+                fn main() {
+                    foo();
+                }
+            "#,
+            "\
+error: Function [1] 'main' is invalid
+  ┌─ wgsl:7:17
+  │  \n7 │ ╭                 fn main() {
+8 │ │                     foo();
+  │ │                     ^^^^ invalid function call
+  │ ╰──────────────────────────^ naga::Function [1]
+  │  \n  = Call to [0] is invalid
+  = Requires 1 arguments, but 0 are provided
+
+",
+        ),
+        (
+            "\
+@compute @workgroup_size(1, 1)
+fn main() {
+    // Bad: `9001` isn't a `bool`.
+    _ = select(1, 2, 9001);
+}
+",
+            "\
+error: Entry point main at Compute is invalid
+  ┌─ wgsl:4:9
+  │
+4 │     _ = select(1, 2, 9001);
+  │         ^^^^^^ naga::Expression [3]
+  │
+  = Expression [3] is invalid
+  = Expected selection condition to be a boolean value, got Scalar(Scalar { kind: Sint, width: 4 })
+
+",
+        ),
+        (
+            "\
+@compute @workgroup_size(1, 1)
+fn main() {
+    // Bad: `bool` and abstract int args. don't match.
+    _ = select(true, 1, false);
+}
+",
+            "\
+error: Entry point main at Compute is invalid
+  ┌─ wgsl:4:9
+  │
+4 │     _ = select(true, 1, false);
+  │         ^^^^^^ naga::Expression [3]
+  │
+  = Expression [3] is invalid
+  = Expected selection argument types to match, but reject value of type Scalar(Scalar { kind: Bool, width: 1 }) does not match accept value of value Scalar(Scalar { kind: Sint, width: 4 })
+
+",
+        ),
+    ];
+
+    for (source, expected_err) in cases {
+        let module = naga::front::wgsl::parse_str(source).unwrap();
+        let err = valid::Validator::new(Default::default(), valid::Capabilities::all())
+            .validate_no_overrides(&module)
+            .expect_err("module should be invalid");
+        println!("{}", err.emit_to_string(source));
+        assert_eq!(err.emit_to_string(source), expected_err);
     }
 }
