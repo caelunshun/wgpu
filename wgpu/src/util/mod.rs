@@ -209,7 +209,7 @@ pub trait TextureFormatExt {
     /// which typically indicates this format is not supported
     /// for storage textures.
     ///
-    /// # Examplees
+    /// # Examples
     /// ```
     /// use wgpu::util::TextureFormatExt;
     /// assert_eq!(wgpu::TextureFormat::Bgra8Unorm.to_storage_format(), Some(wgpu::naga::StorageFormat::Bgra8Unorm));
